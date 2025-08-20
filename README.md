@@ -1,0 +1,1 @@
+# adk-bq-nl2sql
