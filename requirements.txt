@@ -5,6 +5,7 @@ google-adk
 python-dotenv
 requests
 langchain-google-vertexai
+langchain-community
 langgraph
 sqlalchemy-bigquery
 tabulate
