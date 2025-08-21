@@ -22,9 +22,6 @@ steps:
       - 'managed'
       # Allow public access to the web app
       - '--allow-unauthenticated'
-      # Increase memory and timeout for audio processing and AI calls
-      - '--memory=2Gi'
-      - '--timeout=600s' # 10 minutes, STT API can be slow
 
 # Store the image name for other build steps and for viewing in build history
 images:

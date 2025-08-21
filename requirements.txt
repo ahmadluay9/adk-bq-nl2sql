@@ -1,3 +1,5 @@
+fastapi
+uvicorn[standard]
 google-cloud-bigquery
 google-adk
 python-dotenv
@@ -7,3 +9,4 @@ langgraph
 sqlalchemy-bigquery
 tabulate
 matplotlib
+db-dtypes
