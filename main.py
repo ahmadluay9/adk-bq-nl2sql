@@ -3,6 +3,7 @@ import uuid
 import base64
 import io
 import os
+import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -357,6 +358,4 @@ async def execute_query_endpoint(request: ExecutionRequest):
 
 # To run this app, save it as main.py and run: uvicorn main:app --reload
 if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 8080))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
