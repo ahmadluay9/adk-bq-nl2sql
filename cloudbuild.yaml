@@ -1,0 +1,41 @@
+steps:
+  # 1. Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', '${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_NAME}:${COMMIT_SHA}', '.']
+
+  # 2. Push the container image to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', '${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_NAME}:${COMMIT_SHA}']
+
+  # 3. Deploy the container image to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_SERVICE_NAME}'
+      - '--image'
+      - '${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_NAME}:${COMMIT_SHA}'
+      - '--region'
+      - '${_LOCATION}'
+      - '--platform'
+      - 'managed'
+      # Allow public access to the web app
+      - '--allow-unauthenticated'
+      # Increase memory and timeout for audio processing and AI calls
+      - '--memory=2Gi'
+      - '--timeout=600s' # 10 minutes, STT API can be slow
+
+# Store the image name for other build steps and for viewing in build history
+images:
+  - '${_LOCATION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_SERVICE_NAME}:${COMMIT_SHA}'
+
+# Define substitutions for reusable variables
+substitutions:
+  _SERVICE_NAME: 'bigquery-nl2sql'
+  _REPOSITORY: 'bigquery-qa' # The name of your Artifact Registry repository
+  _LOCATION: 'asia-southeast2'    # The region for Artifact Registry and Cloud Run
+
+# Configure logging to go to Cloud Logging for better visibility
+options:
+  logging: CLOUD_LOGGING_ONLY

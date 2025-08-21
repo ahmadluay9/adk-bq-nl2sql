@@ -1,0 +1,9 @@
+google-cloud-bigquery
+google-adk
+python-dotenv
+requests
+langchain-google-vertexai
+langgraph
+sqlalchemy-bigquery
+tabulate
+matplotlib

@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BigQuery Q&A Frontend</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .loader {
+            border-top-color: #3498db;
+            -webkit-animation: spin 1s linear infinite;
+            animation: spin 1s linear infinite;
+        }
+        @-webkit-keyframes spin {
+            0% { -webkit-transform: rotate(0deg); }
+            100% { -webkit-transform: rotate(360deg); }
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 min-h-screen flex items-center justify-center p-4">
+
+    <div class="w-full max-w-4xl mx-auto">
+        <header class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-gray-900">BigQuery Q&A</h1>
+            <p class="text-lg text-gray-600 mt-2">Ask a question in natural language to query your BigQuery dataset.</p>
+        </header>
+
+        <main id="main-content" class="bg-white p-8 rounded-xl shadow-lg transition-all duration-300">
+
+            <!-- Step 1: Initial Question Form -->
+            <section id="question-section">
+                <form id="query-form">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                        <div>
+                            <label for="project_id" class="block text-sm font-medium text-gray-700 mb-1">Project ID</label>
+                            <input type="text" id="project_id" name="project_id" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition" value="eikon-dev-data-team" required>
+                        </div>
+                        <div>
+                            <label for="dataset_id" class="block text-sm font-medium text-gray-700 mb-1">Dataset ID</label>
+                            <input type="text" id="dataset_id" name="dataset_id" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition" value="ancoldbdufanlive" required>
+                        </div>
+                    </div>
+                    <div class="mb-4">
+                        <label for="question" class="block text-sm font-medium text-gray-700 mb-1">Your Question</label>
+                        <textarea id="question" name="question" rows="4" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition" placeholder="e.g., What are the top 5 most sold products?" required></textarea>
+                    </div>
+                    <button type="submit" class="w-full bg-blue-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 transition-all duration-300">
+                        Generate SQL Query
+                    </button>
+                </form>
+            </section>
+
+            <!-- Step 2: Approval Section (hidden by default) -->
+            <section id="approval-section" class="hidden">
+                <h2 class="text-2xl font-bold mb-4 text-center">Review Generated SQL</h2>
+                <p class="text-center text-gray-600 mb-6">Please review the generated SQL query. You can make changes before approving.</p>
+                <div>
+                    <label for="sql-query" class="block text-sm font-medium text-gray-700 mb-1">SQL Query</label>
+                    <textarea id="sql-query" class="w-full p-4 font-mono text-sm bg-gray-50 border border-gray-300 rounded-lg h-48 resize-y"></textarea>
+                </div>
+                <div class="flex justify-center items-center gap-4 mt-6">
+                    <button id="deny-btn" class="px-8 py-3 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 focus:outline-none focus:ring-4 focus:ring-red-300 transition-all">Deny</button>
+                    <button id="approve-btn" class="px-8 py-3 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 focus:outline-none focus:ring-4 focus:ring-green-300 transition-all">Approve & Run</button>
+                </div>
+            </section>
+
+            <!-- Step 3: Results Section (hidden by default) -->
+            <section id="results-section" class="hidden">
+                <h2 class="text-3xl font-bold mb-6 text-center">Query Results</h2>
+                
+                <!-- Answer -->
+                <div class="bg-blue-50 border-l-4 border-blue-500 p-4 rounded-r-lg mb-6">
+                    <h3 class="text-lg font-semibold text-blue-800">Final Answer</h3>
+                    <p id="answer" class="text-blue-700 mt-1"></p>
+                </div>
+
+                <!-- Insight -->
+                <div class="bg-purple-50 border-l-4 border-purple-500 p-4 rounded-r-lg mb-8">
+                    <h3 class="text-lg font-semibold text-purple-800">Data Insight</h3>
+                    <p id="insight" class="text-purple-700 mt-1"></p>
+                </div>
+
+                <!-- Chart -->
+                <div id="chart-container" class="mb-8 p-4 border rounded-lg bg-white shadow-sm">
+                    <h3 class="text-xl font-semibold mb-4 text-gray-700">Chart</h3>
+                    <img id="chart-img" alt="Generated Chart" class="w-full h-auto rounded-md">
+                </div>
+
+                <!-- Raw Data Table -->
+                <div class="mb-6">
+                    <h3 class="text-xl font-semibold mb-4 text-gray-700">Raw Data</h3>
+                    <div id="raw-data-table" class="overflow-x-auto border rounded-lg shadow-sm">
+                        <!-- Table will be generated here by JS -->
+                    </div>
+                </div>
+
+                <div class="text-center mt-8">
+                    <button id="reset-btn" class="w-1/2 bg-gray-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-gray-700 focus:outline-none focus:ring-4 focus:ring-gray-300 transition-all">
+                        Ask Another Question
+                    </button>
+                </div>
+            </section>
+
+            <!-- Loader and Error Messages -->
+            <div id="loader" class="hidden my-8 text-center">
+                <div class="loader ease-linear rounded-full border-8 border-t-8 border-gray-200 h-24 w-24 mx-auto"></div>
+                <p class="mt-4 text-gray-600 font-medium">Processing your request...</p>
+            </div>
+            <div id="error-message" class="hidden my-4 bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-r-lg" role="alert">
+                <p class="font-bold">Error!</p>
+                <p id="error-text"></p>
+            </div>
+
+        </main>
+    </div>
+
+    <script>
+        // --- DOM Element References ---
+        const questionSection = document.getElementById('question-section');
+        const approvalSection = document.getElementById('approval-section');
+        const resultsSection = document.getElementById('results-section');
+        
+        const queryForm = document.getElementById('query-form');
+        const sqlQueryTextarea = document.getElementById('sql-query');
+        
+        const approveBtn = document.getElementById('approve-btn');
+        const denyBtn = document.getElementById('deny-btn');
+        const resetBtn = document.getElementById('reset-btn');
+
+        const loader = document.getElementById('loader');
+        const errorMessage = document.getElementById('error-message');
+        const errorText = document.getElementById('error-text');
+
+        // --- State Management ---
+        let threadId = null;
+        // NOTE: In a real app, you might want to change this to your actual API endpoint.
+        const API_BASE_URL = 'http://127.0.0.1:8000';
+
+        // --- Helper Functions ---
+        function showLoader() {
+            hideError();
+            questionSection.classList.add('hidden');
+            approvalSection.classList.add('hidden');
+            resultsSection.classList.add('hidden');
+            loader.classList.remove('hidden');
+        }
+
+        function hideLoader() {
+            loader.classList.add('hidden');
+        }
+
+        function showError(message) {
+            hideLoader();
+            errorText.textContent = message;
+            errorMessage.classList.remove('hidden');
+        }
+
+        function hideError() {
+            errorMessage.classList.add('hidden');
+        }
+
+        function resetUI() {
+            hideLoader();
+            hideError();
+            approvalSection.classList.add('hidden');
+            resultsSection.classList.add('hidden');
+            questionSection.classList.remove('hidden');
+            queryForm.reset();
+            threadId = null;
+        }
+
+        // --- Event Listeners ---
+
+        /**
+         * Handles the initial form submission to generate the SQL query.
+         */
+        queryForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            showLoader();
+
+            const formData = new FormData(queryForm);
+            const requestData = {
+                project_id: formData.get('project_id'),
+                dataset_id: formData.get('dataset_id'),
+                question: formData.get('question'),
+            };
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/generate-query`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestData),
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || `HTTP error! Status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                threadId = data.thread_id;
+                sqlQueryTextarea.value = data.query;
+
+                hideLoader();
+                questionSection.classList.add('hidden');
+                approvalSection.classList.remove('hidden');
+
+            } catch (error) {
+                showError(`Failed to generate query: ${error.message}`);
+                questionSection.classList.remove('hidden');
+            }
+        });
+
+        /**
+         * Handles the "Approve" button click to execute the query.
+         */
+        approveBtn.addEventListener('click', async () => {
+            if (!threadId) {
+                showError("Session expired or invalid. Please start over.");
+                return;
+            }
+            showLoader();
+
+            const requestData = {
+                thread_id: threadId,
+                approved: true,
+                query: sqlQueryTextarea.value, // Send the (potentially edited) query
+            };
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/execute-query`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestData),
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail || `HTTP error! Status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                displayResults(data);
+
+            } catch (error) {
+                showError(`Failed to execute query: ${error.message}`);
+                approvalSection.classList.remove('hidden'); // Show approval section again on failure
+            }
+        });
+
+        /**
+         * Handles the "Deny" button click.
+         */
+        denyBtn.addEventListener('click', () => {
+            alert('Operation cancelled.');
+            resetUI();
+        });
+        
+        /**
+         * Handles the "Ask Another Question" button click.
+         */
+        resetBtn.addEventListener('click', resetUI);
+
+
+        /**
+         * Displays the final results from the API.
+         * @param {object} data The data object from the /execute-query endpoint.
+         */
+        function displayResults(data) {
+            // Populate answer and insight
+            document.getElementById('answer').textContent = data.answer || 'No answer provided.';
+            document.getElementById('insight').textContent = data.insight || 'No insight provided.';
+
+            // Display chart
+            const chartImg = document.getElementById('chart-img');
+            const chartContainer = document.getElementById('chart-container');
+            if (data.chart_png_base64) {
+                chartImg.src = `data:image/png;base64,${data.chart_png_base64}`;
+                chartContainer.classList.remove('hidden');
+            } else {
+                chartContainer.classList.add('hidden');
+            }
+
+            // Display raw data table
+            const tableContainer = document.getElementById('raw-data-table');
+            tableContainer.innerHTML = ''; // Clear previous results
+            if (data.raw_result && data.raw_result.length > 0) {
+                const table = document.createElement('table');
+                table.className = 'min-w-full divide-y divide-gray-200';
+                
+                const thead = document.createElement('thead');
+                thead.className = 'bg-gray-50';
+                const headerRow = document.createElement('tr');
+                Object.keys(data.raw_result[0]).forEach(key => {
+                    const th = document.createElement('th');
+                    th.scope = 'col';
+                    th.className = 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider';
+                    th.textContent = key;
+                    headerRow.appendChild(th);
+                });
+                thead.appendChild(headerRow);
+                table.appendChild(thead);
+
+                const tbody = document.createElement('tbody');
+                tbody.className = 'bg-white divide-y divide-gray-200';
+                data.raw_result.forEach(rowData => {
+                    const row = document.createElement('tr');
+                    Object.values(rowData).forEach(value => {
+                        const td = document.createElement('td');
+                        td.className = 'px-6 py-4 whitespace-nowrap text-sm text-gray-700';
+                        td.textContent = value;
+                        row.appendChild(td);
+                    });
+                    tbody.appendChild(row);
+                });
+                table.appendChild(tbody);
+                tableContainer.appendChild(table);
+            } else {
+                tableContainer.innerHTML = '<p class="text-center text-gray-500 p-4">No raw data returned.</p>';
+            }
+
+            hideLoader();
+            approvalSection.classList.add('hidden');
+            resultsSection.classList.remove('hidden');
+        }
+
+    </script>
+</body>
+</html>
