@@ -2,8 +2,10 @@
 import uuid
 import base64
 import io
+import os
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import TypedDict, List, Dict, Any
 
@@ -26,6 +28,14 @@ app = FastAPI(
     title="BigQuery Q&A with Human Approval API",
     description="An API to generate and execute SQL queries on BigQuery with a human approval step.",
     version="1.0.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
 )
 
 # --- Pydantic Models for API validation ---
@@ -348,4 +358,5 @@ async def execute_query_endpoint(request: ExecutionRequest):
 # To run this app, save it as main.py and run: uvicorn main:app --reload
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=port)
