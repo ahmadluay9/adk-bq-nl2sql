@@ -216,12 +216,12 @@ def generate_insight(state: State):
     llm = ChatVertexAI(model="gemini-2.5-pro")
     insight_prompt = PromptTemplate.from_template(
         """
-        You are a data analyst. Given the following SQL query and its result,
-        provide a brief, one-sentence insight into what the data reveals.
+        Anda adalah seorang analis data. Berdasarkan query SQL dan hasilnya berikut ini,
+        berikan insight singkat dalam satu kalimat dalam Bahasa Indonesia mengenai apa yang diungkapkan oleh data tersebut.
 
         SQL Query: {query}
         SQL Result: {result}
-        Insight:
+        Insight (dalam Bahasa Indonesia):
         """
     )
     insight_chain = insight_prompt | llm
@@ -237,12 +237,12 @@ def generate_answer(state: State):
     llm = ChatVertexAI(model="gemini-2.5-pro")
     answer_prompt = PromptTemplate.from_template(
         """
-        Given the user's question and the data insight, provide a final answer.
+        Berdasarkan pertanyaan pengguna dan insight data, berikan jawaban akhir yang ringkas **dalam Bahasa Indonesia**.
 
-        Question: {question}
+        Pertanyaan: {question}
         Insight: {insight}
-        Data Result (for context): {result}
-        Final Answer:
+        Hasil Data (untuk konteks): {result}
+        Jawaban Akhir:
         """
     )
     answer_chain = answer_prompt | llm

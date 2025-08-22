@@ -88,6 +88,12 @@
                     <p id="insight" class="text-purple-700 mt-1"></p>
                 </div>
 
+                <!-- Executed SQL Query -->
+                <div class="bg-gray-50 border-l-4 border-gray-500 p-4 rounded-r-lg mb-8">
+                    <h3 class="text-lg font-semibold text-gray-800">Executed SQL Query</h3>
+                    <pre class="text-gray-700 mt-2 p-3 bg-white rounded-md font-mono text-sm overflow-x-auto"><code id="executed-sql"></code></pre>
+                </div>
+
                 <!-- Chart -->
                 <div id="chart-container" class="mb-8 p-4 border rounded-lg bg-white shadow-sm">
                     <h3 class="text-xl font-semibold mb-4 text-gray-700">Chart</h3>
@@ -228,11 +234,13 @@
                 return;
             }
             showLoader();
+            
+            const executedQuery = sqlQueryTextarea.value; // Capture query before sending
 
             const requestData = {
                 thread_id: threadId,
                 approved: true,
-                query: sqlQueryTextarea.value, // Send the (potentially edited) query
+                query: executedQuery, // Send the (potentially edited) query
             };
 
             try {
@@ -248,7 +256,7 @@
                 }
 
                 const data = await response.json();
-                displayResults(data);
+                displayResults(data, executedQuery); // Pass executed query to display
 
             } catch (error) {
                 showError(`Failed to execute query: ${error.message}`);
@@ -273,11 +281,15 @@
         /**
          * Displays the final results from the API.
          * @param {object} data The data object from the /execute-query endpoint.
+         * @param {string} executedQuery The SQL query that was run.
          */
-        function displayResults(data) {
+        function displayResults(data, executedQuery) {
             // Populate answer and insight
             document.getElementById('answer').textContent = data.answer || 'No answer provided.';
             document.getElementById('insight').textContent = data.insight || 'No insight provided.';
+            
+            // Populate the executed SQL query
+            document.getElementById('executed-sql').textContent = executedQuery || 'No query was executed.';
 
             // Display chart
             const chartImg = document.getElementById('chart-img');
