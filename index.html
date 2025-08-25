@@ -3,168 +3,149 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BigQuery Q&A Frontend</title>
+    <title>BigQuery Q&A Chat</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         body {
             font-family: 'Inter', sans-serif;
         }
+        #chat-box::-webkit-scrollbar {
+            width: 8px;
+        }
+        #chat-box::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        #chat-box::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 4px;
+        }
+        #chat-box::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
         .loader {
             border-top-color: #3498db;
-            -webkit-animation: spin 1s linear infinite;
             animation: spin 1s linear infinite;
-        }
-        @-webkit-keyframes spin {
-            0% { -webkit-transform: rotate(0deg); }
-            100% { -webkit-transform: rotate(360deg); }
         }
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
+        .dot-flashing {
+            position: relative;
+            width: 6px;
+            height: 6px;
+            border-radius: 5px;
+            background-color: #9880ff;
+            color: #9880ff;
+            animation: dot-flashing 1s infinite linear alternate;
+            animation-delay: .5s;
+        }
+        .dot-flashing::before, .dot-flashing::after {
+            content: '';
+            display: inline-block;
+            position: absolute;
+            top: 0;
+        }
+        .dot-flashing::before {
+            left: -10px;
+            width: 6px;
+            height: 6px;
+            border-radius: 5px;
+            background-color: #9880ff;
+            color: #9880ff;
+            animation: dot-flashing 1s infinite alternate;
+            animation-delay: 0s;
+        }
+        .dot-flashing::after {
+            left: 10px;
+            width: 6px;
+            height: 6px;
+            border-radius: 5px;
+            background-color: #9880ff;
+            color: #9880ff;
+            animation: dot-flashing 1s infinite alternate;
+            animation-delay: 1s;
+        }
+        @keyframes dot-flashing {
+            0% { background-color: #a7a7a7; }
+            50%, 100% { background-color: #6b6b6b; }
+        }
     </style>
 </head>
-<body class="bg-gray-100 text-gray-800 min-h-screen flex items-center justify-center p-4">
+<body class="bg-gray-100 text-gray-800">
 
-    <div class="w-full max-w-4xl mx-auto">
-        <header class="text-center mb-8">
-            <h1 class="text-4xl font-bold text-gray-900">BigQuery Q&A</h1>
-            <p class="text-lg text-gray-600 mt-2">Ask a question in natural language to query your BigQuery dataset.</p>
+    <div class="flex flex-col h-screen bg-white">
+        <header class="bg-blue-600 text-white p-4 text-center shadow-md z-10">
+            <h1 class="text-2xl font-bold">BigQuery Q&A Assistant</h1>
         </header>
+        
+        <div class="bg-gray-50 p-3 border-b">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm max-w-4xl mx-auto">
+                <div>
+                    <label for="project_id" class="block text-xs font-medium text-gray-600">Project ID</label>
+                    <input type="text" id="project_id" name="project_id" class="w-full px-3 py-1 mt-1 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition" value="eikon-dev-data-team" required>
+                </div>
+                <div>
+                    <label for="dataset_id" class="block text-xs font-medium text-gray-600">Dataset ID</label>
+                    <input type="text" id="dataset_id" name="dataset_id" class="w-full px-3 py-1 mt-1 border border-gray-300 rounded-md focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition" value="ancoldbdufanlive" required>
+                </div>
+            </div>
+        </div>
 
-        <main id="main-content" class="bg-white p-8 rounded-xl shadow-lg transition-all duration-300">
+        <main id="chat-box" class="flex-1 p-6 overflow-y-auto bg-gray-100">
+            <div class="max-w-4xl mx-auto w-full">
+                 <!-- Chat messages will be appended here -->
+            </div>
+        </main>
 
-            <!-- Step 1: Initial Question Form -->
-            <section id="question-section">
-                <form id="query-form">
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
-                        <div>
-                            <label for="project_id" class="block text-sm font-medium text-gray-700 mb-1">Project ID</label>
-                            <input type="text" id="project_id" name="project_id" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition" value="eikon-dev-data-team" required>
-                        </div>
-                        <div>
-                            <label for="dataset_id" class="block text-sm font-medium text-gray-700 mb-1">Dataset ID</label>
-                            <input type="text" id="dataset_id" name="dataset_id" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition" value="ancoldbdufanlive" required>
-                        </div>
-                    </div>
-                    <div class="mb-4">
-                        <label for="question" class="block text-sm font-medium text-gray-700 mb-1">Your Question</label>
-                        <textarea id="question" name="question" rows="4" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition" placeholder="e.g., What are the top 5 most sold products?" required></textarea>
-                    </div>
-                    <button type="submit" class="w-full bg-blue-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 transition-all duration-300">
-                        Generate SQL Query
+        <footer class="p-4 bg-white border-t">
+            <div class="max-w-4xl mx-auto">
+                <div id="error-message" class="hidden mb-2 bg-red-100 border border-red-300 text-red-700 px-4 py-2 rounded-lg text-sm" role="alert">
+                    <p id="error-text"></p>
+                </div>
+                <form id="chat-form" class="flex items-center gap-3">
+                    <input type="text" id="chat-input" class="flex-1 w-full px-4 py-2 border border-gray-300 rounded-full focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition" placeholder="Ask a question about the data..." autocomplete="off" required>
+                    <button type="submit" class="bg-blue-600 text-white font-bold p-2 rounded-full hover:bg-blue-700 focus:outline-none focus:ring-4 focus:ring-blue-300 transition-all duration-300">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 20 20" fill="currentColor">
+                            <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+                        </svg>
                     </button>
                 </form>
-            </section>
-
-            <!-- Step 2: Approval Section (hidden by default) -->
-            <section id="approval-section" class="hidden">
-                <h2 class="text-2xl font-bold mb-4 text-center">Review Generated SQL</h2>
-                <p class="text-center text-gray-600 mb-6">Please review the generated SQL query. You can make changes before approving.</p>
-                <div>
-                    <label for="sql-query" class="block text-sm font-medium text-gray-700 mb-1">SQL Query</label>
-                    <textarea id="sql-query" class="w-full p-4 font-mono text-sm bg-gray-50 border border-gray-300 rounded-lg h-48 resize-y"></textarea>
-                </div>
-                <div class="flex justify-center items-center gap-4 mt-6">
-                    <button id="deny-btn" class="px-8 py-3 bg-red-600 text-white font-bold rounded-lg hover:bg-red-700 focus:outline-none focus:ring-4 focus:ring-red-300 transition-all">Deny</button>
-                    <button id="approve-btn" class="px-8 py-3 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 focus:outline-none focus:ring-4 focus:ring-green-300 transition-all">Approve & Run</button>
-                </div>
-            </section>
-
-            <!-- Step 3: Results Section (hidden by default) -->
-            <section id="results-section" class="hidden">
-                <h2 class="text-3xl font-bold mb-6 text-center">Query Results</h2>
-                
-                <!-- Answer -->
-                <div class="bg-blue-50 border-l-4 border-blue-500 p-4 rounded-r-lg mb-6">
-                    <h3 class="text-lg font-semibold text-blue-800">Final Answer</h3>
-                    <p id="answer" class="text-blue-700 mt-1"></p>
-                </div>
-
-                <!-- Insight -->
-                <div class="bg-purple-50 border-l-4 border-purple-500 p-4 rounded-r-lg mb-8">
-                    <h3 class="text-lg font-semibold text-purple-800">Data Insight</h3>
-                    <p id="insight" class="text-purple-700 mt-1"></p>
-                </div>
-
-                <!-- Executed SQL Query -->
-                <div class="bg-gray-50 border-l-4 border-gray-500 p-4 rounded-r-lg mb-8">
-                    <h3 class="text-lg font-semibold text-gray-800">Executed SQL Query</h3>
-                    <pre class="text-gray-700 mt-2 p-3 bg-white rounded-md font-mono text-sm overflow-x-auto"><code id="executed-sql"></code></pre>
-                </div>
-
-                <!-- Chart -->
-                <div id="chart-container" class="mb-8 p-4 border rounded-lg bg-white shadow-sm">
-                    <h3 class="text-xl font-semibold mb-4 text-gray-700">Chart</h3>
-                    <img id="chart-img" alt="Generated Chart" class="w-full h-auto rounded-md">
-                </div>
-
-                <!-- Raw Data Table -->
-                <div class="mb-6">
-                    <h3 class="text-xl font-semibold mb-4 text-gray-700">Raw Data</h3>
-                    <div id="raw-data-table" class="overflow-x-auto border rounded-lg shadow-sm">
-                        <!-- Table will be generated here by JS -->
-                    </div>
-                </div>
-
-                <div class="text-center mt-8">
-                    <button id="reset-btn" class="w-1/2 bg-gray-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-gray-700 focus:outline-none focus:ring-4 focus:ring-gray-300 transition-all">
-                        Ask Another Question
-                    </button>
-                </div>
-            </section>
-
-            <!-- Loader and Error Messages -->
-            <div id="loader" class="hidden my-8 text-center">
-                <div class="loader ease-linear rounded-full border-8 border-t-8 border-gray-200 h-24 w-24 mx-auto"></div>
-                <p class="mt-4 text-gray-600 font-medium">Processing your request...</p>
             </div>
-            <div id="error-message" class="hidden my-4 bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded-r-lg" role="alert">
-                <p class="font-bold">Error!</p>
-                <p id="error-text"></p>
-            </div>
+        </footer>
+    </div>
 
-        </main>
+    <div id="fullscreen-modal" class="fixed inset-0 bg-black bg-opacity-80 flex items-center justify-center p-4 hidden z-50 cursor-pointer">
+        <img id="fullscreen-img" src="" alt="Fullscreen Chart" class="max-w-full max-h-full object-contain">
+        <button id="close-modal-btn" class="absolute top-5 right-8 text-white text-5xl font-bold">&times;</button>
     </div>
 
     <script>
         // --- DOM Element References ---
-        const questionSection = document.getElementById('question-section');
-        const approvalSection = document.getElementById('approval-section');
-        const resultsSection = document.getElementById('results-section');
-        
-        const queryForm = document.getElementById('query-form');
-        const sqlQueryTextarea = document.getElementById('sql-query');
-        
-        const approveBtn = document.getElementById('approve-btn');
-        const denyBtn = document.getElementById('deny-btn');
-        const resetBtn = document.getElementById('reset-btn');
-
-        const loader = document.getElementById('loader');
+        const chatBox = document.getElementById('chat-box').querySelector('.max-w-4xl');
+        const chatBoxContainer = document.getElementById('chat-box');
+        const chatForm = document.getElementById('chat-form');
+        const chatInput = document.getElementById('chat-input');
+        const projectIdInput = document.getElementById('project_id');
+        const datasetIdInput = document.getElementById('dataset_id');
         const errorMessage = document.getElementById('error-message');
         const errorText = document.getElementById('error-text');
+        const fullscreenModal = document.getElementById('fullscreen-modal');
+        const fullscreenImg = document.getElementById('fullscreen-img');
+        const closeModalBtn = document.getElementById('close-modal-btn');
 
         // --- State Management ---
         let threadId = null;
-        // NOTE: In a real app, you might want to change this to your actual API endpoint.
-        const API_BASE_URL = 'https://bigquery-nl2sql-158103152291.asia-southeast2.run.app/';
+        let chatHistory = [];
+        const API_BASE_URL = 'https://bigquery-nl2sql-158103152291.asia-southeast2.run.app';
 
         // --- Helper Functions ---
-        function showLoader() {
-            hideError();
-            questionSection.classList.add('hidden');
-            approvalSection.classList.add('hidden');
-            resultsSection.classList.add('hidden');
-            loader.classList.remove('hidden');
-        }
-
-        function hideLoader() {
-            loader.classList.add('hidden');
+        function scrollToBottom() {
+            chatBoxContainer.scrollTop = chatBoxContainer.scrollHeight;
         }
 
         function showError(message) {
-            hideLoader();
             errorText.textContent = message;
             errorMessage.classList.remove('hidden');
         }
@@ -172,31 +153,52 @@
         function hideError() {
             errorMessage.classList.add('hidden');
         }
+        
+        function displayMessage(content, sender) {
+            const messageWrapper = document.createElement('div');
+            messageWrapper.className = 'mb-4 flex';
 
-        function resetUI() {
-            hideLoader();
-            hideError();
-            approvalSection.classList.add('hidden');
-            resultsSection.classList.add('hidden');
-            questionSection.classList.remove('hidden');
-            queryForm.reset();
-            threadId = null;
+            const messageBubble = document.createElement('div');
+            messageBubble.className = 'max-w-xl p-3 rounded-lg shadow';
+            
+            if (sender === 'user') {
+                messageWrapper.classList.add('justify-end');
+                messageBubble.classList.add('bg-blue-500', 'text-white');
+                messageBubble.textContent = content;
+            } else {
+                messageWrapper.classList.add('justify-start');
+                messageBubble.classList.add('bg-gray-200', 'text-gray-800');
+                messageBubble.innerHTML = content;
+            }
+            
+            messageWrapper.appendChild(messageBubble);
+            chatBox.appendChild(messageWrapper);
+            scrollToBottom();
+            return messageBubble;
+        }
+
+        function showThinkingIndicator() {
+            const indicatorHTML = `<div class="flex items-center justify-center p-2"><div class="dot-flashing"></div></div>`;
+            return displayMessage(indicatorHTML, 'bot');
         }
 
         // --- Event Listeners ---
-
-        /**
-         * Handles the initial form submission to generate the SQL query.
-         */
-        queryForm.addEventListener('submit', async (e) => {
+        chatForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            showLoader();
+            const question = chatInput.value.trim();
+            if (!question) return;
 
-            const formData = new FormData(queryForm);
+            hideError();
+            displayMessage(question, 'user');
+            chatHistory.push({ role: 'user', content: question });
+            chatInput.value = '';
+            const thinkingIndicator = showThinkingIndicator();
+
             const requestData = {
-                project_id: formData.get('project_id'),
-                dataset_id: formData.get('dataset_id'),
-                question: formData.get('question'),
+                project_id: projectIdInput.value,
+                dataset_id: datasetIdInput.value,
+                question: question,
+                chat_history: chatHistory.slice(0, -1)
             };
 
             try {
@@ -208,39 +210,67 @@
 
                 if (!response.ok) {
                     const errorData = await response.json();
+                    chatHistory.pop();
                     throw new Error(errorData.detail || `HTTP error! Status: ${response.status}`);
                 }
 
                 const data = await response.json();
                 threadId = data.thread_id;
-                sqlQueryTextarea.value = data.query;
-
-                hideLoader();
-                questionSection.classList.add('hidden');
-                approvalSection.classList.remove('hidden');
+                
+                thinkingIndicator.parentElement.remove();
+                displayApprovalMessage(data.query);
 
             } catch (error) {
+                thinkingIndicator.parentElement.remove();
+                displayMessage(`Sorry, I ran into an error: ${error.message}`, 'bot');
                 showError(`Failed to generate query: ${error.message}`);
-                questionSection.classList.remove('hidden');
             }
         });
 
-        /**
-         * Handles the "Approve" button click to execute the query.
-         */
-        approveBtn.addEventListener('click', async () => {
+        function displayApprovalMessage(query) {
+            const approvalHTML = `
+                <p class="mb-2 font-medium">Here is the generated SQL query. Please review it.</p>
+                <textarea id="sql-query-textarea" class="w-full p-2 font-mono text-sm bg-gray-50 border border-gray-300 rounded-md h-32 resize-y">${query}</textarea>
+                <div class="flex justify-end items-center gap-2 mt-2">
+                    <button id="deny-btn" class="px-4 py-1 text-sm bg-red-500 text-white font-semibold rounded-md hover:bg-red-600 transition-all">Deny</button>
+                    <button id="approve-btn" class="px-4 py-1 text-sm bg-green-500 text-white font-semibold rounded-md hover:bg-green-600 transition-all">Approve & Run</button>
+                </div>
+            `;
+            const messageBubble = displayMessage(approvalHTML, 'bot');
+
+            messageBubble.querySelector('#deny-btn').addEventListener('click', () => {
+                chatHistory.pop();
+                messageBubble.innerHTML = `<p class="text-gray-500 italic">Operation cancelled by user.</p>`;
+            });
+
+            messageBubble.querySelector('#approve-btn').addEventListener('click', handleApproval);
+        }
+
+        async function handleApproval() {
             if (!threadId) {
                 showError("Session expired or invalid. Please start over.");
                 return;
             }
-            showLoader();
-            
-            const executedQuery = sqlQueryTextarea.value; // Capture query before sending
+
+            const thinkingIndicator = showThinkingIndicator();
+            const sqlTextarea = document.getElementById('sql-query-textarea');
+            const executedQuery = sqlTextarea.value;
+
+            const approveBtn = document.getElementById('approve-btn');
+            const denyBtn = document.getElementById('deny-btn');
+            if(approveBtn && denyBtn) {
+                approveBtn.disabled = true;
+                denyBtn.disabled = true;
+                approveBtn.classList.add('opacity-50');
+                denyBtn.classList.add('opacity-50');
+            }
 
             const requestData = {
                 thread_id: threadId,
                 approved: true,
-                query: executedQuery, // Send the (potentially edited) query
+                query: executedQuery,
+                project_id: projectIdInput.value,
+                dataset_id: datasetIdInput.value,
             };
 
             try {
@@ -256,93 +286,116 @@
                 }
 
                 const data = await response.json();
-                displayResults(data, executedQuery); // Pass executed query to display
+                thinkingIndicator.parentElement.remove();
+                displayResults(data, executedQuery);
+
+                const botResponseSummary = `Generated SQL: ${executedQuery}. Final Answer: ${data.answer || 'N/A'}. Insight: ${data.insight || 'N/A'}`;
+                chatHistory.push({ role: 'assistant', content: botResponseSummary });
 
             } catch (error) {
+                thinkingIndicator.parentElement.remove();
+                displayMessage(`Sorry, I ran into an error while executing the query: ${error.message}`, 'bot');
                 showError(`Failed to execute query: ${error.message}`);
-                approvalSection.classList.remove('hidden'); // Show approval section again on failure
+                chatHistory.pop();
             }
-        });
-
-        /**
-         * Handles the "Deny" button click.
-         */
-        denyBtn.addEventListener('click', () => {
-            alert('Operation cancelled.');
-            resetUI();
-        });
-        
-        /**
-         * Handles the "Ask Another Question" button click.
-         */
-        resetBtn.addEventListener('click', resetUI);
-
-
-        /**
-         * Displays the final results from the API.
-         * @param {object} data The data object from the /execute-query endpoint.
-         * @param {string} executedQuery The SQL query that was run.
-         */
-        function displayResults(data, executedQuery) {
-            // Populate answer and insight
-            document.getElementById('answer').textContent = data.answer || 'No answer provided.';
-            document.getElementById('insight').textContent = data.insight || 'No insight provided.';
-            
-            // Populate the executed SQL query
-            document.getElementById('executed-sql').textContent = executedQuery || 'No query was executed.';
-
-            // Display chart
-            const chartImg = document.getElementById('chart-img');
-            const chartContainer = document.getElementById('chart-container');
-            if (data.chart_png_base64) {
-                chartImg.src = `data:image/png;base64,${data.chart_png_base64}`;
-                chartContainer.classList.remove('hidden');
-            } else {
-                chartContainer.classList.add('hidden');
-            }
-
-            // Display raw data table
-            const tableContainer = document.getElementById('raw-data-table');
-            tableContainer.innerHTML = ''; // Clear previous results
-            if (data.raw_result && data.raw_result.length > 0) {
-                const table = document.createElement('table');
-                table.className = 'min-w-full divide-y divide-gray-200';
-                
-                const thead = document.createElement('thead');
-                thead.className = 'bg-gray-50';
-                const headerRow = document.createElement('tr');
-                Object.keys(data.raw_result[0]).forEach(key => {
-                    const th = document.createElement('th');
-                    th.scope = 'col';
-                    th.className = 'px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider';
-                    th.textContent = key;
-                    headerRow.appendChild(th);
-                });
-                thead.appendChild(headerRow);
-                table.appendChild(thead);
-
-                const tbody = document.createElement('tbody');
-                tbody.className = 'bg-white divide-y divide-gray-200';
-                data.raw_result.forEach(rowData => {
-                    const row = document.createElement('tr');
-                    Object.values(rowData).forEach(value => {
-                        const td = document.createElement('td');
-                        td.className = 'px-6 py-4 whitespace-nowrap text-sm text-gray-700';
-                        td.textContent = value;
-                        row.appendChild(td);
-                    });
-                    tbody.appendChild(row);
-                });
-                table.appendChild(tbody);
-                tableContainer.appendChild(table);
-            } else {
-                tableContainer.innerHTML = '<p class="text-center text-gray-500 p-4">No raw data returned.</p>';
-            }
-
-            hideLoader();
-            approvalSection.classList.add('hidden');
-            resultsSection.classList.remove('hidden');
         }
+
+        function displayResults(data, executedQuery) {
+            if (data.answer) {
+                displayMessage(`<strong class="font-semibold block mb-1">Final Answer:</strong>${data.answer}`, 'bot');
+            }
+            if (data.insight) {
+                displayMessage(`<strong class="font-semibold block mb-1">Data Insight:</strong>${data.insight}`, 'bot');
+            }
+            
+            // PERUBAHAN DI SINI: Menambahkan tombol Hide/Show untuk SQL
+            const sqlId = `sql-${Date.now()}`;
+            const sqlHTML = `
+                <div class="flex justify-between items-center mb-1">
+                    <strong class="font-semibold">Executed SQL:</strong>
+                    <button data-sql-id="${sqlId}" class="toggle-sql-btn text-xs text-blue-600 hover:underline">Hide</button>
+                </div>
+                <pre id="${sqlId}" class="bg-gray-100 p-2 rounded mt-1 font-mono text-xs overflow-x-auto"><code>${executedQuery}</code></pre>
+            `;
+            displayMessage(sqlHTML, 'bot');
+            // AKHIR PERUBAHAN
+
+            if (data.chart_png_base64) {
+                const chartId = `chart-${Date.now()}`;
+                const chartHTML = `
+                    <div class="flex justify-between items-center mb-2">
+                        <strong class="font-semibold">Chart:</strong>
+                        <button data-chart-id="${chartId}" class="show-fullscreen-btn text-xs text-blue-600 hover:underline">Lihat Layar Penuh</button>
+                    </div>
+                    <img id="${chartId}" src="data:image/png;base64,${data.chart_png_base64}" alt="Generated Chart" class="w-full h-auto rounded-md border">
+                `;
+                displayMessage(chartHTML, 'bot');
+            }
+
+            if (data.raw_result && data.raw_result.length > 0) {
+                let tableHTML = '<strong class="font-semibold block mb-2">Raw Data:</strong><div class="overflow-x-auto border rounded-lg shadow-sm"><table class="min-w-full divide-y divide-gray-200 text-sm">';
+                
+                tableHTML += '<thead class="bg-gray-50"><tr class="text-left">';
+                Object.keys(data.raw_result[0]).forEach(key => {
+                    tableHTML += `<th class="px-4 py-2 font-medium text-gray-600 uppercase tracking-wider">${key}</th>`;
+                });
+                tableHTML += '</tr></thead>';
+
+                tableHTML += '<tbody class="bg-white divide-y divide-gray-200">';
+                data.raw_result.forEach(rowData => {
+                    tableHTML += '<tr>';
+                    Object.values(rowData).forEach(value => {
+                        tableHTML += `<td class="px-4 py-2 whitespace-nowrap">${value}</td>`;
+                    });
+                    tableHTML += '</tr>';
+                });
+                tableHTML += '</tbody></table></div>';
+                displayMessage(tableHTML, 'bot');
+            } else {
+                 displayMessage(`<strong class="font-semibold block mb-1">Raw Data:</strong><p class="text-gray-500 italic">No raw data returned.</p>`, 'bot');
+            }
+        }
+        
+        chatBox.addEventListener('click', (e) => {
+            if (e.target) {
+                // Menangani tombol fullscreen chart
+                if (e.target.classList.contains('show-fullscreen-btn')) {
+                    const chartId = e.target.dataset.chartId;
+                    const chartImg = document.getElementById(chartId);
+                    if (chartImg) {
+                        fullscreenImg.src = chartImg.src;
+                        fullscreenModal.classList.remove('hidden');
+                    }
+                }
+
+                // PERUBAHAN DI SINI: Menangani tombol toggle SQL
+                if (e.target.classList.contains('toggle-sql-btn')) {
+                    const sqlId = e.target.dataset.sqlId;
+                    const preElement = document.getElementById(sqlId);
+                    if (preElement) {
+                        const isHidden = preElement.classList.toggle('hidden');
+                        e.target.textContent = isHidden ? 'Show' : 'Hide';
+                    }
+                }
+                // AKHIR PERUBAHAN
+            }
+        });
+
+        function closeModal() {
+            fullscreenModal.classList.add('hidden');
+            fullscreenImg.src = '';
+        }
+
+        closeModalBtn.addEventListener('click', closeModal);
+        fullscreenModal.addEventListener('click', (e) => {
+            if (e.target === fullscreenModal) {
+                closeModal();
+            }
+        });
+
+        window.addEventListener('load', () => {
+            displayMessage('Hello! How can I help you analyze the BigQuery data today?', 'bot');
+        });
 
     </script>
 </body>
