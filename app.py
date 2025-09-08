@@ -2,14 +2,17 @@ import streamlit as st
 from langchain_community.utilities import SQLDatabase
 from langchain_google_vertexai import ChatVertexAI
 from langchain.prompts import PromptTemplate, ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+from langchain_core.tools import tool
+from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
 from langchain.schema.runnable import RunnablePassthrough
+from langchain_experimental.utilities import PythonREPL
 import pandas as pd
 import uuid
 import os
-
+import io
+import matplotlib.pyplot as plt
 # Used for LangGraph
-from typing import TypedDict, List, Dict, Any
+from typing import TypedDict, List, Dict, Any, Annotated
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -23,11 +26,18 @@ class State(TypedDict):
     insight: str
     answer: str
     chart_image: bytes | None # To hold the chart image in memory
+    chart_code: str | None # To hold the Python code for the chart
+    chart_type: str | None # To hold the chosen chart type
+    x_col: str | None # To hold the chosen x-axis column
+    visualization_reason: str | None # To hold the reason for the chart choice
+    y_col: str | None # To hold the chosen y-axis column
     log: List[str] # To hold the processing steps
+    error: str | None # To hold error messages for the conditional edge
+    retry_count: int # To prevent infinite loops
 
 # --- 2. Define the Nodes for the Graph ---
 
-# We'll use st.cache_resource to initialize the LLM and DB connection once
+# st.cache_resource to initialize the LLM and DB connection once
 @st.cache_resource
 def get_llm():
     return ChatVertexAI(model="gemini-2.5-flash")
@@ -50,13 +60,15 @@ def write_query(state: State):
     You are a Google BigQuery SQL expert.
     Based on the table schema below, write a SQL query that would answer the user's question.
     Use only Google BigQuery standard SQL syntax.
-    Pay special attention to date and time functions, using functions like `FORMAT_DATE`, `FORMAT_TIMESTAMP`, or `EXTRACT`.
-    Do NOT use functions from other SQL dialects like `strftime` (SQLite) or `DATE_FORMAT` (MySQL).
     
-    Pay attention to use only the column names that you can see in the schema description.
-    Be careful to not query for columns that do not exist.
-    Pay attention to which column is in which table.
-    
+    **CRITICAL BIGQUERY RULES FOR DATES AND TIMESTAMPS:**
+    1.  `TIMESTAMP_SUB` **CANNOT** be used with `YEAR`, `QUARTER`, or `MONTH`. It will cause an error.
+    2.  To subtract years or months from a `TIMESTAMP` column, you **MUST** cast the column to a `DATE` first and use `DATE_SUB`.
+        - **Correct Example:** `WHERE DATE(t.TGL_TRANSAKSI) >= DATE_SUB(CURRENT_DATE(), INTERVAL 3 YEAR)`
+        - **Incorrect Example:** `WHERE t.TGL_TRANSAKSI >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 3 YEAR)`
+    3.  For date/time formatting, use `FORMAT_DATE` or `FORMAT_TIMESTAMP`.
+    4.  To extract parts of a date, use `EXTRACT`.
+
     Do not make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
 
     Table Schema: {schema}
@@ -127,11 +139,10 @@ def execute_query(state: State):
     
     try:
         query_result_dicts = db._execute(query, fetch="all")
-        query_result_str = str(query_result_dicts)
-        return {"result": query_result_str, "structured_result": query_result_dicts, "log": log, "error": None}
+        return {"structured_result": query_result_dicts, "log": log, "error": None}
     except Exception as e:
         error_message = f"Query execution failed: {e}"
-        return {"result": "[]", "structured_result": [], "log": log + [error_message], "error": error_message}
+        return {"structured_result": [], "log": log + [error_message], "error": error_message}
 
 def rewrite_query_on_error(state: State):
     """Takes the failed query and error, and asks the LLM to rewrite it."""
@@ -153,11 +164,12 @@ def rewrite_query_on_error(state: State):
         You are a Google BigQuery SQL expert. The following SQL query failed with an error.
         Your task is to analyze the query and the error message, and rewrite the query to fix the issue.
         Pay close attention to the error message as it contains crucial clues.
-        Common issues include:
-        - Using functions from other SQL dialects (e.g., `strftime` instead of `FORMAT_DATE`).
-        - Incorrect column or table names.
-        - Syntax errors.
-        - Data type mismatches.
+        
+        **CRITICAL BIGQUERY RULES FOR DATES AND TIMESTAMPS:**
+        1.  `TIMESTAMP_SUB` **CANNOT** be used with `YEAR`, `QUARTER`, or `MONTH`. It will cause an error.
+        2.  To subtract years or months from a `TIMESTAMP` column, you **MUST** cast the column to a `DATE` first and use `DATE_SUB`.
+            - **Correct Example:** `WHERE DATE(t.TGL_TRANSAKSI) >= DATE_SUB(CURRENT_DATE(), INTERVAL 3 YEAR)`
+            - **Incorrect Example:** `WHERE t.TGL_TRANSAKSI >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 3 YEAR)`
 
         Original Failed Query:
         {query}
@@ -168,7 +180,6 @@ def rewrite_query_on_error(state: State):
         Corrected Google BigQuery SQL Query:
         """
     )
-
     rewriter_chain = rewrite_prompt | llm | StrOutputParser()
     corrected_query = rewriter_chain.invoke({"query": query, "error": error})
     clean_corrected_query = corrected_query.replace("```sql", "").replace("```", "").strip()
@@ -180,145 +191,177 @@ def rewrite_query_on_error(state: State):
         "retry_count": retry_count + 1
     }
 
-def generate_chart(state: State):
-    """Generates an appropriate chart and the code to create it."""
+def choose_chart(state: State):
+    """Chooses an appropriate chart type and columns based on the query result."""
     log = state.get("log", [])
-    log.append("📊 Generating chart...")
-    data = state.get("structured_result", [])
-
-    if not data or len(data) < 2 or len(data[0].keys()) < 2:
-        return {"chart_image": None, "chart_code": None, "log": log}
+    log.append("📊 Choosing visualization...")
+    
+    structured_result = state["structured_result"]
+    
+    if not structured_result or len(structured_result) < 2:
+        log.append("No chart generated (not enough data).")
+        return {"log": log, "chart_type": "table"}
 
     try:
-        import matplotlib.pyplot as plt
-        import io
-        
-        df_creation_code = f"data = {data}\ndf = pd.DataFrame(data)"
-        
-        df = pd.DataFrame(data)
-        
-        headers = list(df.columns)
-        
-        # --- Type Conversion and Axis Selection Logic ---
-        # Try to convert columns to datetime, but keep track of original objects
-        potential_x_cols = {}
-        for col in headers:
-            if df[col].dtype == 'object':
-                try:
-                    # Attempt conversion and store if successful
-                    pd.to_datetime(df[col], errors='raise')
-                    potential_x_cols[col] = 'datetime'
-                except (ValueError, TypeError):
-                    # If it fails, treat as a categorical string
-                    potential_x_cols[col] = 'categorical'
-            elif pd.api.types.is_numeric_dtype(df[col]):
-                 # Also consider low-cardinality numerics as categorical (e.g., year)
-                 if df[col].nunique() < 25:
-                     potential_x_cols[col] = 'categorical'
+        df = pd.DataFrame(structured_result)
+        column_info = f"Columns: {', '.join(df.columns)}\nData Types:\n{df.dtypes.to_string()}"
+        first_few_rows = df.head(3).to_string()
+    except Exception:
+         log.append("Could not process data for chart selection.")
+         return {"log": log, "chart_type": "table"}
 
+    llm = get_llm()
 
-        datetime_cols = [k for k, v in potential_x_cols.items() if v == 'datetime']
-        categorical_cols = [k for k, v in potential_x_cols.items() if v == 'categorical']
-        numeric_cols = [h for h in headers if pd.api.types.is_numeric_dtype(df[h]) and h not in categorical_cols]
+    chart_prompt = PromptTemplate.from_template(
+        """
+        You are a data visualization expert. Your task is to choose the best chart type 
+        to visualize the data from a user's question and a SQL query result.
 
-        x_candidates = datetime_cols + categorical_cols
-        y_candidates = numeric_cols
-        x_col, y_col = None, None
+        1.  **Analyze the data**: Review the column names, data types, and a few sample rows.
+        2.  **Determine the best chart type**: Choose from 'bar', 'line', 'pie', 'scatter', or 'table'.
+        3.  **Select columns**: Identify the most appropriate column for the x-axis and y-axis.
+            - For pie charts, the x-axis (`x_col`) should be the labels and the y-axis (`y_col`) should be the values.
+            - If no chart is suitable, choose 'table'.
+        4.  **Provide a reason**: Briefly explain why this visualization is a good choice.
 
-        if len(x_candidates) >= 1 and len(y_candidates) >= 1:
-            x_col = x_candidates[0]
-            y_col = y_candidates[0]
-        elif len(numeric_cols) >= 2:
-            col1, col2 = numeric_cols[0], numeric_cols[1]
-            nunique1, nunique2 = df[col1].nunique(), df[col2].nunique()
-            x_col, y_col = (col1, col2) if nunique1 < nunique2 else (col2, col1)
-        else:
-            x_col, y_col = headers[0], headers[1]
+        User's Question: {question}
         
-        if not x_col or not y_col:
-            return {"chart_image": None, "chart_code": None, "log": log}
+        Data Information:
+        {column_info}
         
-        # --- Chart Type Selection ---
-        chart_type = 'bar'
-        if x_col in datetime_cols:
-            chart_type = 'line'
-            # Convert the column for real now for sorting/plotting
-            df[x_col] = pd.to_datetime(df[x_col])
-        elif 2 <= df[x_col].nunique() <= 7:
-            chart_type = 'pie'
-            
-        # --- Build the Chart Code String for Display ---
-        code_lines = [
-            "import matplotlib.pyplot as plt",
-            "import pandas as pd",
-            "",
-            df_creation_code,
-            ""
-        ]
+        Sample Data:
+        {first_few_rows}
         
-        if chart_type == 'line':
-            code_lines.append(f"df['{x_col}'] = pd.to_datetime(df['{x_col}'])")
-            code_lines.append(f"df = df.sort_values(by='{x_col}')")
-
-        code_lines.extend(["plt.figure(figsize=(10, 6))", ""])
-
-        if chart_type == 'line':
-            code_lines.append(f"plt.plot(df['{x_col}'], df['{y_col}'], marker='o', linestyle='-')")
-        elif chart_type == 'pie':
-            code_lines.append(f"plt.pie(df['{y_col}'], labels=df['{x_col}'], autopct='%1.1f%%', startangle=90)")
-        else: # Bar chart
-            code_lines.append(f"plt.bar(df['{x_col}'].astype(str), df['{y_col}'])")
-        
-        code_lines.append(f"plt.ylabel('{y_col.replace('_', ' ').title()}')")
-        code_lines.extend(["", f"plt.xlabel('{x_col.replace('_', ' ').title()}')", f"plt.title('{y_col.replace('_', ' ').title()} by {x_col.replace('_', ' ').title()}')"])
-
-        if chart_type != 'pie':
-             code_lines.append("plt.xticks(rotation=45, ha='right')")
-        
-        code_lines.extend(["plt.tight_layout()", "plt.show()"])
-        chart_code_to_display = "\n".join(code_lines)
-        
-        # --- Generate the Chart Image for Streamlit ---
-        plt.figure(figsize=(10, 6))
-        if chart_type == 'line':
-            df = df.sort_values(by=x_col)
-        
-        if chart_type == 'line':
-            plt.plot(df[x_col], df[y_col], marker='o', linestyle='-')
-        elif chart_type == 'pie':
-            plt.pie(df[y_col], labels=df[x_col], autopct='%1.1f%%', startangle=90)
-        else: # Bar chart
-            df_chart = df.nlargest(20, y_col) if len(df) > 20 and pd.api.types.is_numeric_dtype(df[y_col]) else df
-            plt.bar(df_chart[x_col].astype(str), df_chart[y_col])
-
-        plt.ylabel(y_col.replace('_', ' ').title())
-        plt.xlabel(x_col.replace('_', ' ').title())
-        plt.title(f"{y_col.replace('_', ' ').title()} by {x_col.replace('_', ' ').title()}")
-        if chart_type != 'pie':
-             plt.xticks(rotation=45, ha='right')
-        plt.tight_layout()
-        
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png')
-        buf.seek(0)
-        plt.close('all') # Close all figures to prevent memory leaks
-
-        return {"chart_image": buf.getvalue(), "chart_code": chart_code_to_display, "log": log}
+        Return a JSON object with your choices. Example:
+        {{
+          "chart_type": "bar",
+          "x_col": "category_column",
+          "y_col": "value_column",
+          "reason": "A bar chart is best to compare values across different categories."
+        }}
+        """
+    )
+    
+    parser = JsonOutputParser()
+    chart_chain = chart_prompt | llm | parser
+    
+    try:
+        chart_details = chart_chain.invoke({
+            "question": state["question"],
+            "column_info": column_info,
+            "first_few_rows": first_few_rows
+        })
+        log.append(f"Chart choice: {chart_details.get('chart_type')} - {chart_details.get('reason')}")
+        return {
+            "log": log,
+            "chart_type": chart_details.get("chart_type"),
+            "x_col": chart_details.get("x_col"),
+            "y_col": chart_details.get("y_col"),
+            "visualization_reason": chart_details.get("reason")
+        }
     except Exception as e:
-        st.warning(f"Could not generate chart: {e}")
+        log.append(f"Error choosing chart type: {e}")
+        return {"log": log, "chart_type": "table"}
+    
+# --- Define Python REPL tool for chart execution ---
+repl = PythonREPL()
+
+@tool
+def python_repl_tool(code: Annotated[str, "The Python code to execute to generate your chart."]):
+    """Execute Python code using a Python REPL (Read-Eval-Print Loop).
+    
+    Args:
+        code (str): The Python code to execute.
+    Returns:
+        str: The result of the executed code or an error message if execution fails.
+    """
+    try:
+        result = repl.run(code)
+    except BaseException as e:
+        return f"Failed to execute. Error: {repr(e)}"
+    
+    result_str = f"Successfully executed:\n```python\n{code}\n```\nStdout: {result}"
+    return result_str + "\n\nIf you have completed all tasks, respond with FINAL ANSWER."
+
+
+def generate_chart(state: State):
+    """Generate chart code and image using LLM + Python REPL based on state."""
+    log = state.get("log", [])
+    log.append("📈 Generating chart code and visualization...")
+
+    chart_type = state.get("chart_type", "table")
+    x_col = state.get("x_col")
+    y_col = state.get("y_col")
+    structured_result = state.get("structured_result")
+
+    if chart_type == "table" or not structured_result:
+        log.append("No chart generated. Returning table view.")
         return {"chart_image": None, "chart_code": None, "log": log}
 
+    df = pd.DataFrame(structured_result)
+
+    llm = get_llm()
+    chart_prompt = PromptTemplate.from_template(
+    """
+    You are a Python data visualization expert.
+    Generate Python code that uses matplotlib (and optionally seaborn) 
+    to plot a clear and visually appealing {chart_type} chart from the given DataFrame `df`.
+
+    IMPORTANT RULES:
+    1. DO NOT create or simulate data. Always use the provided `df` directly.
+    2. Assume `df` is already defined and contains the real query result.
+    3. x-axis column: {x_col}
+       y-axis column: {y_col}
+    4. Always import matplotlib.pyplot as plt (and seaborn if needed).
+    5. Add a descriptive title, axis labels, and legend if applicable.
+    6. Use `plt.tight_layout()` for spacing.
+    7. End the code with:
+       buf = io.BytesIO(); plt.savefig(buf, format='png'); buf.seek(0)
+
+    DataFrame columns: {columns}
+
+    Return only valid Python code. Do NOT include explanations or markdown.
+    """
+)
+
+    chart_chain = chart_prompt | llm | StrOutputParser()
+    chart_code = chart_chain.invoke({
+        "chart_type": chart_type,
+        "columns": list(df.columns),
+        "x_col": x_col,
+        "y_col": y_col
+    })
+
+    # Clean chart code
+    chart_code = chart_code.replace("```python", "").replace("```", "").strip()
+
+    # Try executing the code in a local sandbox
+    try:
+        buf = io.BytesIO()
+        # Inject df into locals so code can use it
+        local_vars = {"df": df, "io": io, "plt": plt, "pd": pd}
+        exec(chart_code, {}, local_vars)
+        buf = local_vars.get("buf", None)
+        chart_image = buf.getvalue() if buf else None
+    except Exception as e:
+        log.append(f"⚠️ Chart execution failed: {e}")
+        return {"chart_image": None, "chart_code": chart_code, "log": log}
+
+    log.append("✅ Chart generated successfully.")
+    return {"chart_image": chart_image, "chart_code": chart_code, "log": log}
 
 def generate_insight(state: State):
     """Generates insight from the SQL query and its result."""
     log = state.get("log", [])
     log.append("💡 Generating insight...")
     query = state["query"]
-    result = state["result"]
     
     if not state.get("structured_result"):
         return {"insight": "No data was returned from the query.", "log": log}
     
+    structured_result = state["structured_result"]
+    result_str = str(structured_result)
+
     llm = get_llm()
     insight_prompt = PromptTemplate.from_template(
         """
@@ -332,7 +375,7 @@ def generate_insight(state: State):
         """
     )
     insight_chain = insight_prompt | llm | StrOutputParser()
-    insight_text = insight_chain.invoke({"query": query, "result": result})
+    insight_text = insight_chain.invoke({"query": query, "result": result_str})
     return {"insight": insight_text, "log": log}
 
 def generate_answer(state: State):
@@ -364,7 +407,7 @@ def should_continue(state: State):
             return "end"
         return "rewrite_query_on_error"
     else:
-        return "generate_chart"
+        return "choose_visualization"
 
 # --- 3. Build and Compile the Graph ---
 
@@ -375,6 +418,7 @@ def get_graph():
     graph_builder.add_node("check_query", check_query)
     graph_builder.add_node("execute_query", execute_query)
     graph_builder.add_node("rewrite_query_on_error", rewrite_query_on_error)
+    graph_builder.add_node("choose_chart", choose_chart)
     graph_builder.add_node("generate_chart", generate_chart)
     graph_builder.add_node("generate_insight", generate_insight)
     graph_builder.add_node("generate_answer", generate_answer)
@@ -388,12 +432,12 @@ def get_graph():
         should_continue,
         {
             "rewrite_query_on_error": "rewrite_query_on_error",
-            "generate_chart": "generate_chart",
+            "choose_visualization": "choose_chart",
             "end": END
         }
     )
     graph_builder.add_edge("rewrite_query_on_error", "execute_query")
-    
+    graph_builder.add_edge("choose_chart", "generate_chart")
     graph_builder.add_edge("generate_chart", "generate_insight")
     graph_builder.add_edge("generate_insight", "generate_answer")
     graph_builder.add_edge("generate_answer", END)
@@ -430,6 +474,8 @@ for message in st.session_state.messages:
         if "results" in message and message["results"]["query"] != "N/A":
             with st.expander("🔍 Lihat Detail"):
                 st.code(message["results"]["query"], language="sql")
+                if message["results"].get("visualization_reason"):
+                    st.info(f"**Visualization Reason:** {message['results']['visualization_reason']}")
                 if message["results"]["chart"] is not None:
                     st.image(message["results"]["chart"], caption="Generated Chart")
                 if message["results"].get("chart_code"):
@@ -449,12 +495,24 @@ if prompt := st.chat_input("Ask a question about your data..."):
         
         status_placeholder = st.empty()
         final_state = {}
+
+        # This expander will hold the step-by-step results
+        with st.expander("🔍 Lihat Detail", expanded=True) as details_expander:
+            query_placeholder = st.empty()
+            reason_placeholder = st.empty()
+            chart_placeholder = st.empty()
+            code_placeholder = st.empty()
+            data_placeholder = st.empty()
+
+        # The final answer will appear here, outside the expander
+        answer_placeholder = st.empty()
         
         for chunk in graph.stream(initial_state):
             node_name = list(chunk.keys())[0]
             node_output = chunk[node_name]
             final_state.update(node_output)
 
+            # Update status text
             if "log" in final_state and final_state["log"]:
                 last_log = final_state["log"][-1]
                 if "failed" in last_log.lower() or "stopping" in last_log.lower():
@@ -462,32 +520,66 @@ if prompt := st.chat_input("Ask a question about your data..."):
                     break
                 else:
                     status_placeholder.markdown(last_log)
+            
+            # Check the output of the current node and update the UI placeholders
+            if "query" in node_output and node_output["query"]:
+                query_placeholder.code(node_output["query"], language="sql")
+
+            if "structured_result" in node_output and node_output["structured_result"]:
+                data_placeholder.dataframe(pd.DataFrame(node_output["structured_result"]))
+            
+            if "visualization_reason" in node_output and node_output["visualization_reason"]:
+                reason_placeholder.info(f"**Visualization Reason:** {node_output['visualization_reason']}")
+            
+            if "chart_image" in node_output and node_output["chart_image"]:
+                chart_placeholder.image(node_output["chart_image"], caption="Generated Chart")
+
+            if "chart_code" in node_output and node_output["chart_code"]:
+                with code_placeholder.expander("🐍 Show Python Code for Chart"):
+                    st.code(node_output["chart_code"], language="python")
         
         if "failed" in final_state.get("log", [""])[-1].lower() or "stopping" in final_state.get("log", [""])[-1].lower():
              st.stop()
-
-        answer = final_state.get("answer", "I couldn't generate an answer after a few attempts.")
-        st.markdown(answer)
         
+        status_placeholder.markdown("💬 Formulating final answer...")
+
+        # --- Final Answer Streaming ---
+        llm = get_llm()
+        answer_prompt = PromptTemplate.from_template(
+            """
+            Given the user's question and the data insight, provide a concise, natural language final answer.
+            Directly answer the question based on the insight provided.
+
+            Question: {question}
+            Insight: {insight}
+            Final Answer:
+            """
+        )
+        answer_chain = answer_prompt | llm | StrOutputParser()
+
+        insight = final_state.get("insight", "I couldn't generate an insight from the data.")
+        
+        # Use the placeholder to write the stream
+        answer_stream = answer_chain.stream({
+            "question": prompt,
+            "insight": insight
+        })
+        answer = answer_placeholder.write_stream(answer_stream)
+        
+        # All results are now available, so clear the final status message
+        status_placeholder.empty()
+
+        # Save the complete results to session state for history
         results_to_store = {
             "query": final_state.get("query", "N/A"),
             "data": final_state.get("structured_result", []),
             "chart": final_state.get("chart_image", None),
-            "chart_code": final_state.get("chart_code", None)
+            "chart_code": final_state.get("chart_code", None),
+            "visualization_reason": final_state.get("visualization_reason", None)
         }
-        
-        if results_to_store["data"]:
-            with st.expander("🔍 Lihat Detail"):
-                st.code(results_to_store["query"], language="sql")
-                if results_to_store["chart"]:
-                    st.image(results_to_store["chart"], caption="Generated Chart")
-                if results_to_store.get("chart_code"):
-                    with st.expander("🐍 Show Python Code for Chart"):
-                        st.code(results_to_store["chart_code"], language="python")
-                st.dataframe(pd.DataFrame(results_to_store["data"]))
 
         st.session_state.messages.append({
             "role": "assistant", 
-            "content": answer,
+            "content": answer, 
             "results": results_to_store
         })
