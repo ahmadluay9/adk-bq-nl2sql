@@ -7,5 +7,6 @@ langgraph
 sqlalchemy-bigquery
 pandas
 matplotlib
+seaborn
 google-cloud-bigquery
 db-dtypes
