@@ -1,19 +1,25 @@
 import streamlit as st
 from langchain_community.utilities import SQLDatabase
-from langchain_google_vertexai import ChatVertexAI
-from langchain.prompts import PromptTemplate, ChatPromptTemplate
+from langchain_google_vertexai import ChatVertexAI, VertexAIEmbeddings
+from langchain.prompts import PromptTemplate, ChatPromptTemplate, FewShotPromptTemplate
 from langchain_core.tools import tool
 from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
+from langchain_core.example_selectors import SemanticSimilarityExampleSelector
 from langchain.schema.runnable import RunnablePassthrough
+from langchain_postgres import PGVector
+from langchain_core.documents import Document
 import pandas as pd
 import uuid
 import os
 import io
 import matplotlib.pyplot as plt
+from dotenv import load_dotenv
 # Used for LangGraph
 from typing import TypedDict, List, Dict, Any
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
+
+load_dotenv() # Load environment variables from .env file
 
 # --- 1. Define the State for the Graph ---
 # This dictionary will hold the data that moves between the nodes of our graph.
@@ -35,13 +41,132 @@ class State(TypedDict):
 # st.cache_resource to initialize the LLM and DB connection once
 @st.cache_resource
 def get_llm():
-    return ChatVertexAI(model="gemini-2.5-flash")
+    return ChatVertexAI(model=os.environ.get("LLM_MODEL_NAME"))
 
 def get_db(project_id, dataset_id):
     return SQLDatabase.from_uri(f"bigquery://{project_id}/{dataset_id}")
 
+# --- Dynamic Few-Shot Examples Setup ---
+examples = [
+    {
+        "question": "berapa jumlah tiket yang terjual tiap tahunnya dari tahun 2012-2015?",
+        "query": "SELECT EXTRACT(YEAR FROM TGL_TRANSAKSI) AS transaction_year, SUM(JML_TIKET_BYR + JML_TIKET_GRATIS) AS total_tickets_sold FROM `tt_tiketing` WHERE EXTRACT(YEAR FROM TGL_TRANSAKSI) BETWEEN 2012 AND 2015 GROUP BY transaction_year ORDER BY transaction_year;"
+    },
+    {
+        "question": "berapa penjualan tiket per hari di bulan maret 2013?",
+        "query": "SELECT FORMAT_DATE('%Y-%m-%d', DATE(TGL_TRANSAKSI)) AS sales_date, SUM(JML_TIKET_BYR) AS total_paid_tickets_sold FROM `tt_tiketing` WHERE EXTRACT(YEAR FROM TGL_TRANSAKSI) = 2013 AND EXTRACT(MONTH FROM TGL_TRANSAKSI) = 3 GROUP BY sales_date ORDER BY sales_date;"
+    },
+    {
+        "question": "buatkan analisa pendapatan tiket dunia fantasi dari tahun 2012-2014",
+        "query": "SELECT EXTRACT(YEAR FROM TGL_TRANSAKSI) AS tahun_transaksi,SUM(TTL_BAYAR) AS total_pendapatan FROM tt_tiketing WHERE EXTRACT(YEAR FROM TGL_TRANSAKSI) BETWEEN 2012 AND 2014 GROUP BY tahun_transaksi ORDER BY tahun_transaksi;"
+    },
+]
+
+@st.cache_resource
+def get_example_selector():
+    # --- PGVector Connection ---
+    db_user = os.environ.get("POSTGRES_USER")
+    db_password = os.environ.get("POSTGRES_PASSWORD")
+    db_host = os.environ.get("POSTGRES_HOST")
+    # db_host = os.environ.get("POSTGRES_LOCALHOST")
+    db_port = os.environ.get("POSTGRES_PORT")
+    db_name = os.environ.get("POSTGRES_DB")
+
+    if not all([db_user, db_password, db_host, db_port, db_name]):
+        st.error(
+            "Database connection variables are not fully set. "
+            "Please create a `.env` file with `POSTGRES_USER`, `POSTGRES_PASSWORD`, "
+            "`POSTGRES_HOST`, `POSTGRES_PORT`, and `POSTGRES_DB`."
+        )
+        st.stop()
+
+    CONNECTION_STRING = f"postgresql+psycopg://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+    COLLECTION_NAME = "sql_examples_v3" # Changed version to avoid conflicts
+
+    embeddings = VertexAIEmbeddings(model_name=os.environ.get("EMBEDDING_MODEL_NAME"))
+
+    # Create Document objects for PGVector. The question is the content to be searched against.
+    documents = [
+        Document(
+            page_content=ex["question"],
+            metadata=ex  # Store the full example dict in metadata
+        ) for ex in examples
+    ]
+    
+    try:
+        # Initialize PGVector. This will create the collection and embed the documents
+        # if it's the first time, or connect to the existing collection.
+        vectorstore = PGVector.from_documents(
+            documents=documents,
+            embedding=embeddings,
+            collection_name=COLLECTION_NAME,
+            connection=CONNECTION_STRING,
+            pre_delete_collection=True # Start fresh during development
+        )
+    except Exception as e:
+        st.error(f"Failed to connect to or initialize PGVector. Please check your connection string and database setup. Error: {e}")
+        st.stop()
+
+    # The selector will use the PGVector store for similarity searches
+    example_selector = SemanticSimilarityExampleSelector(
+        vectorstore=vectorstore,
+        k=3,
+    )
+
+    # This prompt formats each selected example before it's added to the main prompt
+    example_prompt = PromptTemplate.from_template("User input: {question}\nSQL query: {query}")
+    
+    return example_selector, example_prompt
+
+# def write_query(state: State):
+#     """Generates a SQL query from the user's question."""
+#     log = state.get("log", [])
+#     log.append("✍️ Generating SQL query...")
+#     question = state["question"]
+#     project_id = st.session_state.project_id
+#     dataset_id = st.session_state.dataset_id
+    
+#     llm = get_llm()
+#     db = get_db(project_id, dataset_id)
+
+#     template = """
+#     You are a Google BigQuery SQL expert.
+#     Based on the table schema below, write a SQL query that would answer the user's question.
+#     Use only Google BigQuery standard SQL syntax.
+    
+#     **CRITICAL BIGQUERY RULES FOR DATES AND TIMESTAMPS:**
+#     1.  `TIMESTAMP_SUB` **CANNOT** be used with `YEAR`, `QUARTER`, or `MONTH`. It will cause an error.
+#     2.  To subtract years or months from a `TIMESTAMP` column, you **MUST** cast the column to a `DATE` first and use `DATE_SUB`.
+#         - **Correct Example:** `WHERE DATE(t.TGL_TRANSAKSI) >= DATE_SUB(CURRENT_DATE(), INTERVAL 3 YEAR)`
+#         - **Incorrect Example:** `WHERE t.TGL_TRANSAKSI >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 3 YEAR)`
+#     3.  For date/time formatting, use `FORMAT_DATE` or `FORMAT_TIMESTAMP`.
+#     4.  To extract parts of a date, use `EXTRACT`.
+
+#     Do not make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
+
+#     Table Schema: {schema}
+#     Question: {question}
+#     SQL Query:
+#     """
+#     prompt = PromptTemplate.from_template(template)
+    
+#     def get_schema(_):
+#         return db.get_table_info()
+
+#     sql_query_chain = (
+#         RunnablePassthrough.assign(schema=get_schema)
+#         | prompt
+#         | llm.bind(stop=["\nSQLResult:"])
+#         | StrOutputParser()
+#     )
+
+#     generated_query = sql_query_chain.invoke({"question": question})
+#     clean_query = generated_query.replace("```sql", "").replace("```", "").strip()
+    
+#     return {"query": clean_query, "log": log}
+
 def write_query(state: State):
-    """Generates a SQL query from the user's question."""
+    """Generates a SQL query from the user's question using dynamic few-shot examples."""
     log = state.get("log", [])
     log.append("✍️ Generating SQL query...")
     question = state["question"]
@@ -50,34 +175,23 @@ def write_query(state: State):
     
     llm = get_llm()
     db = get_db(project_id, dataset_id)
-
-    template = """
-    You are a Google BigQuery SQL expert.
-    Based on the table schema below, write a SQL query that would answer the user's question.
-    Use only Google BigQuery standard SQL syntax.
     
-    **CRITICAL BIGQUERY RULES FOR DATES AND TIMESTAMPS:**
-    1.  `TIMESTAMP_SUB` **CANNOT** be used with `YEAR`, `QUARTER`, or `MONTH`. It will cause an error.
-    2.  To subtract years or months from a `TIMESTAMP` column, you **MUST** cast the column to a `DATE` first and use `DATE_SUB`.
-        - **Correct Example:** `WHERE DATE(t.TGL_TRANSAKSI) >= DATE_SUB(CURRENT_DATE(), INTERVAL 3 YEAR)`
-        - **Incorrect Example:** `WHERE t.TGL_TRANSAKSI >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 3 YEAR)`
-    3.  For date/time formatting, use `FORMAT_DATE` or `FORMAT_TIMESTAMP`.
-    4.  To extract parts of a date, use `EXTRACT`.
+    example_selector, example_prompt = get_example_selector()
 
-    Do not make any DML statements (INSERT, UPDATE, DELETE, DROP etc.) to the database.
+    few_shot_prompt = FewShotPromptTemplate(
+        example_selector=example_selector,
+        example_prompt=example_prompt,
+        prefix="You are a Google BigQuery SQL expert. Given an input question, create a syntactically correct Google BigQuery query to run.\n\nHere is the relevant table info: {schema}\n\nBelow are a number of examples of questions and their corresponding SQL queries.",
+        suffix="User input: {question}\nSQL query: ",
+        input_variables=["question", "schema"],
+    )
 
-    Table Schema: {schema}
-    Question: {question}
-    SQL Query:
-    """
-    prompt = PromptTemplate.from_template(template)
-    
     def get_schema(_):
         return db.get_table_info()
 
     sql_query_chain = (
         RunnablePassthrough.assign(schema=get_schema)
-        | prompt
+        | few_shot_prompt
         | llm.bind(stop=["\nSQLResult:"])
         | StrOutputParser()
     )
@@ -113,7 +227,7 @@ def rewrite_query_on_error(state: State):
     error = state["error"]
     retry_count = state.get("retry_count", 0)
 
-    if retry_count >= 2: # Limit retries
+    if retry_count >= 5: # Limit retries
         log.append("❌ Reached max retries. Stopping.")
         return {"log": log}
 

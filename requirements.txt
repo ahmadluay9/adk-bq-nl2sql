@@ -3,6 +3,9 @@ langchain
 langchain-community
 langchain_experimental
 langchain-google-vertexai
+langchain-google-genai
+langchain-postgres
+psycopg[binary]
 langgraph
 sqlalchemy-bigquery
 pandas
